@@ -1,5 +1,11 @@
 
-import { PasswordGeneratorSettings, PasswordStrength } from '../types/vault';
+import { PasswordGeneratorSettings } from '../types/vault';
+// We'll export the PasswordStrength enum directly from the utils file
+export enum PasswordStrength {
+  WEAK = 'weak',
+  MEDIUM = 'medium',
+  STRONG = 'strong',
+}
 
 const UPPERCASE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const LOWERCASE_CHARS = 'abcdefghijklmnopqrstuvwxyz';
