@@ -1,5 +1,4 @@
 
-import { PasswordGeneratorSettings } from '../types/vault';
 // We'll export the PasswordStrength enum directly from the utils file
 export enum PasswordStrength {
   WEAK = 'weak',
@@ -183,3 +182,6 @@ export function generatePronounceablePassword(length: number): string {
   // Truncate if we ended up too long
   return password.substring(0, length);
 }
+
+// Import the type at the end to avoid circular references
+import { PasswordGeneratorSettings } from '../types/vault';

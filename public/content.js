@@ -1,6 +1,296 @@
 
 // Content script for Key Vault Guardian Angel
-// This script runs on web pages to detect forms, capture passwords, and enable autofill
+console.log("Key Vault Guardian Angel content script loaded");
+
+// Wait for the DOM to be fully loaded
+document.addEventListener('DOMContentLoaded', () => {
+  initializeContentScript();
+});
+
+// Also try to initialize immediately (for pages that might be already loaded)
+initializeContentScript();
+
+function initializeContentScript() {
+  // Add CSS for the badge and credential selector
+  injectStyles();
+  
+  // Detect login forms and add badges to password fields
+  setupPasswordFieldBadges();
+  
+  // Set up listeners for form submissions
+  setupFormSubmissionListeners();
+  
+  // Setup mutation observer to detect dynamically added forms
+  setupDynamicFormDetection();
+}
+
+function injectStyles() {
+  const style = document.createElement('style');
+  style.textContent = `
+    .keyvault-badge {
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background-color: #6e59a5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      z-index: 9999;
+      transition: all 0.2s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+    }
+    .keyvault-badge:hover {
+      background-color: #8b5cf6;
+      transform: translateY(-50%) scale(1.1);
+    }
+    .keyvault-badge svg {
+      width: 12px;
+      height: 12px;
+    }
+    .keyvault-credential-selector {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 2147483647;
+    }
+    .keyvault-credential-content {
+      background-color: #fff;
+      border-radius: 8px;
+      padding: 20px;
+      max-width: 400px;
+      width: 100%;
+      max-height: 80vh;
+      overflow: auto;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+    }
+    .keyvault-credential-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 10px;
+    }
+    .keyvault-credential-title {
+      margin: 0;
+      font-size: 18px;
+      font-weight: bold;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    .keyvault-close-btn {
+      background: none;
+      border: none;
+      font-size: 24px;
+      cursor: pointer;
+      color: #666;
+    }
+    .keyvault-credential-item {
+      padding: 12px;
+      margin: 8px 0;
+      border-radius: 4px;
+      cursor: pointer;
+      border: 1px solid #e0e0e0;
+      transition: background-color 0.2s;
+    }
+    .keyvault-credential-item:hover {
+      background-color: #f5f5f5;
+    }
+    .keyvault-credential-item-title {
+      font-weight: bold;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    .keyvault-credential-item-username {
+      font-size: 14px;
+      color: #666;
+      margin-top: 4px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    .keyvault-no-credentials {
+      padding: 15px;
+      text-align: center;
+      color: #666;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function setupPasswordFieldBadges() {
+  // Find all password fields
+  const passwordFields = document.querySelectorAll('input[type="password"]');
+  
+  if (passwordFields.length === 0) {
+    // No password fields found yet, try again later (for dynamic pages)
+    setTimeout(setupPasswordFieldBadges, 1000);
+    return;
+  }
+
+  console.log(`Key Vault found ${passwordFields.length} password fields`);
+  
+  // Add badges to password fields
+  passwordFields.forEach(field => {
+    addBadgeToPasswordField(field);
+  });
+}
+
+function addBadgeToPasswordField(field) {
+  // Check if badge already exists for this field
+  const existingBadge = field.parentElement?.querySelector('.keyvault-badge');
+  if (existingBadge) return;
+  
+  // Make sure the field's container is position relative
+  const fieldStyle = window.getComputedStyle(field);
+  const fieldPosition = fieldStyle.position;
+  
+  // Create a wrapper if needed
+  let wrapper = field.parentElement;
+  if (!wrapper || (fieldPosition !== 'relative' && fieldPosition !== 'absolute')) {
+    // Create a container for positioning
+    wrapper = document.createElement('div');
+    wrapper.style.position = 'relative';
+    wrapper.style.display = 'inline-block';
+    wrapper.style.width = field.offsetWidth ? field.offsetWidth + 'px' : '100%';
+    
+    // Insert the wrapper
+    field.parentNode.insertBefore(wrapper, field);
+    wrapper.appendChild(field);
+  }
+  
+  // Add padding to the field to make room for the badge
+  const currentPaddingRight = parseInt(fieldStyle.paddingRight) || 0;
+  field.style.paddingRight = (currentPaddingRight + 30) + 'px';
+  
+  // Create the badge element
+  const badge = document.createElement('div');
+  badge.className = 'keyvault-badge';
+  badge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M19 11H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2z"></path><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
+  
+  // Add click handler to the badge
+  badge.addEventListener('click', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    // Request credentials from the extension
+    chrome.runtime.sendMessage({ 
+      action: "autofillRequested", 
+      url: window.location.hostname 
+    });
+  });
+  
+  // Append the badge to the wrapper
+  wrapper.appendChild(badge);
+}
+
+function setupFormSubmissionListeners() {
+  const forms = document.querySelectorAll('form');
+  forms.forEach(form => {
+    if (form.querySelector('input[type="password"]')) {
+      form.addEventListener('submit', captureSubmittedCredentials);
+    }
+  });
+}
+
+function captureSubmittedCredentials(e) {
+  const form = e.target;
+  const passwordField = form.querySelector('input[type="password"]');
+  const usernameField = findUsernameField(form, passwordField);
+  
+  if (passwordField && usernameField && passwordField.value) {
+    // Send message to background script
+    chrome.runtime.sendMessage({
+      action: 'credentialSubmitted',
+      data: {
+        url: window.location.href,
+        domain: window.location.hostname,
+        username: usernameField.value,
+        password: passwordField.value,
+        title: document.title || window.location.hostname
+      }
+    });
+  }
+}
+
+function findUsernameField(form, passwordField) {
+  // Common username field types and attributes
+  const usernameSelectors = [
+    'input[type="text"][name*="user"]',
+    'input[type="text"][name*="email"]',
+    'input[type="text"][id*="user"]', 
+    'input[type="text"][id*="email"]',
+    'input[type="email"]',
+    'input[autocomplete="username"]',
+    'input[type="text"]',  // Fallback to any text field
+    'input:not([type="password"])'  // Last resort: any non-password input
+  ];
+  
+  // Try to find username field in form
+  let usernameField = null;
+  for (const selector of usernameSelectors) {
+    const fields = form.querySelectorAll(selector);
+    for (const field of fields) {
+      // Skip hidden fields
+      if (field.type === 'hidden') continue;
+      
+      // Skip fields after the password field
+      if (field.compareDocumentPosition(passwordField) & Node.DOCUMENT_POSITION_PRECEDING) continue;
+      
+      usernameField = field;
+      break;
+    }
+    if (usernameField) break;
+  }
+  
+  return usernameField;
+}
+
+function setupDynamicFormDetection() {
+  // Create a MutationObserver to watch for dynamically added forms and password fields
+  const observer = new MutationObserver(mutations => {
+    let shouldCheckForPasswordFields = false;
+    
+    for (const mutation of mutations) {
+      if (mutation.type === 'childList' && mutation.addedNodes.length) {
+        mutation.addedNodes.forEach(node => {
+          // Check if the added node is or contains a form or input
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            const element = node as Element;
+            if (element.tagName === 'FORM' || 
+                element.tagName === 'INPUT' ||
+                element.querySelector('form') ||
+                element.querySelector('input[type="password"]')) {
+              shouldCheckForPasswordFields = true;
+            }
+          }
+        });
+      }
+    }
+    
+    if (shouldCheckForPasswordFields) {
+      // Delay slightly to ensure the DOM is updated
+      setTimeout(() => {
+        setupPasswordFieldBadges();
+        setupFormSubmissionListeners();
+      }, 500);
+    }
+  });
+  
+  // Start observing
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true
+  });
+}
 
 // Create and inject the credential selector modal
 function createCredentialSelector() {
@@ -13,47 +303,23 @@ function createCredentialSelector() {
   // Create modal container
   const modal = document.createElement('div');
   modal.id = 'keyvault-credential-selector';
-  modal.style.position = 'fixed';
-  modal.style.top = '0';
-  modal.style.left = '0';
-  modal.style.width = '100%';
-  modal.style.height = '100%';
-  modal.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
-  modal.style.display = 'flex';
-  modal.style.alignItems = 'center';
-  modal.style.justifyContent = 'center';
-  modal.style.zIndex = '2147483647';
+  modal.className = 'keyvault-credential-selector';
   
   // Create modal content
   const modalContent = document.createElement('div');
-  modalContent.style.backgroundColor = '#fff';
-  modalContent.style.borderRadius = '8px';
-  modalContent.style.padding = '20px';
-  modalContent.style.maxWidth = '400px';
-  modalContent.style.width = '100%';
-  modalContent.style.maxHeight = '80vh';
-  modalContent.style.overflow = 'auto';
-  modalContent.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1)';
+  modalContent.className = 'keyvault-credential-content';
   
   // Create header
   const header = document.createElement('div');
-  header.style.display = 'flex';
-  header.style.justifyContent = 'space-between';
-  header.style.alignItems = 'center';
-  header.style.marginBottom = '15px';
+  header.className = 'keyvault-credential-header';
   
   const title = document.createElement('h2');
+  title.className = 'keyvault-credential-title';
   title.textContent = 'Choose a credential';
-  title.style.margin = '0';
-  title.style.fontSize = '18px';
-  title.style.fontWeight = 'bold';
   
   const closeBtn = document.createElement('button');
+  closeBtn.className = 'keyvault-close-btn';
   closeBtn.innerHTML = '&times;';
-  closeBtn.style.background = 'none';
-  closeBtn.style.border = 'none';
-  closeBtn.style.fontSize = '24px';
-  closeBtn.style.cursor = 'pointer';
   closeBtn.onclick = () => modal.remove();
   
   header.appendChild(title);
@@ -62,7 +328,6 @@ function createCredentialSelector() {
   // Create credential list container
   const credentialList = document.createElement('div');
   credentialList.id = 'keyvault-credential-list';
-  credentialList.style.marginTop = '10px';
   
   // Add elements to DOM
   modalContent.appendChild(header);
@@ -87,6 +352,7 @@ function populateCredentialSelector(credentials) {
   
   if (credentials.length === 0) {
     const noCredentials = document.createElement('p');
+    noCredentials.className = 'keyvault-no-credentials';
     noCredentials.textContent = 'No credentials found for this site.';
     credentialList.appendChild(noCredentials);
     return;
@@ -94,32 +360,18 @@ function populateCredentialSelector(credentials) {
   
   credentials.forEach(cred => {
     const credItem = document.createElement('div');
-    credItem.style.padding = '10px';
-    credItem.style.margin = '5px 0';
-    credItem.style.borderRadius = '4px';
-    credItem.style.cursor = 'pointer';
-    credItem.style.border = '1px solid #e0e0e0';
-    credItem.style.transition = 'background-color 0.2s';
+    credItem.className = 'keyvault-credential-item';
     
     const credTitle = document.createElement('div');
+    credTitle.className = 'keyvault-credential-item-title';
     credTitle.textContent = cred.title || 'Untitled';
-    credTitle.style.fontWeight = 'bold';
     
     const credUsername = document.createElement('div');
+    credUsername.className = 'keyvault-credential-item-username';
     credUsername.textContent = cred.username;
-    credUsername.style.fontSize = '14px';
-    credUsername.style.color = '#666';
     
     credItem.appendChild(credTitle);
     credItem.appendChild(credUsername);
-    
-    credItem.addEventListener('mouseover', () => {
-      credItem.style.backgroundColor = '#f5f5f5';
-    });
-    
-    credItem.addEventListener('mouseout', () => {
-      credItem.style.backgroundColor = '';
-    });
     
     credItem.addEventListener('click', () => {
       fillLoginForm(cred);
@@ -128,52 +380,6 @@ function populateCredentialSelector(credentials) {
     
     credentialList.appendChild(credItem);
   });
-}
-
-// Function to detect login forms on the page
-function detectLoginForms() {
-  const forms = [];
-  
-  // Find all forms
-  document.querySelectorAll('form').forEach((form, formIndex) => {
-    // Check for password fields
-    const passwordFields = form.querySelectorAll('input[type="password"]');
-    
-    if (passwordFields.length > 0) {
-      // Try to find username/email field
-      let usernameField = null;
-      
-      // Look for typical username/email input types
-      const potentialUsernameFields = form.querySelectorAll(
-        'input[type="text"], input[type="email"], input:not([type="password"])'
-      );
-      
-      // Get the username field that comes before the password field
-      potentialUsernameFields.forEach(field => {
-        if (!usernameField && field.offsetTop <= passwordFields[0].offsetTop) {
-          usernameField = field;
-        }
-      });
-      
-      if (usernameField) {
-        forms.push({
-          formIndex,
-          usernameField: {
-            id: usernameField.id || '',
-            name: usernameField.name || '',
-            type: usernameField.type || ''
-          },
-          passwordField: {
-            id: passwordFields[0].id || '',
-            name: passwordFields[0].name || '',
-            type: 'password'
-          }
-        });
-      }
-    }
-  });
-  
-  return forms;
 }
 
 // Fill login form with credentials
@@ -185,59 +391,35 @@ function fillLoginForm(credential) {
   // Use the first password field
   const passwordField = passwordFields[0];
   
-  // Find the likely username field
-  let usernameField = null;
+  // Find the form containing the password field
   const form = passwordField.closest('form');
   
-  // If we found a form, look for username fields within it
+  // Find the username field
+  let usernameField = null;
   if (form) {
-    // First try to find fields before the password field
-    const possibleFields = form.querySelectorAll('input[type="text"], input[type="email"], input:not([type="password"])');
-    for (const field of possibleFields) {
-      if (field.offsetTop <= passwordField.offsetTop) {
-        usernameField = field;
-      }
-    }
-    
-    // If no field was found before, take the first input field that's not a password
-    if (!usernameField) {
-      usernameField = form.querySelector('input:not([type="password"])');
-    }
-  } else {
-    // If no form found, look for inputs near the password field
-    const allInputs = document.querySelectorAll('input:not([type="password"])');
-    for (const input of allInputs) {
-      const inputRect = input.getBoundingClientRect();
-      const pwRect = passwordField.getBoundingClientRect();
-      
-      // Check if input is close to password field
-      const verticalDistance = Math.abs(inputRect.top - pwRect.top);
-      if (verticalDistance < 150) {
-        usernameField = input;
-        break;
-      }
-    }
+    usernameField = findUsernameField(form, passwordField);
   }
   
   // Fill in the credentials
   if (passwordField) {
+    console.log('Filling password field');
     passwordField.value = credential.password;
     passwordField.dispatchEvent(new Event('input', { bubbles: true }));
+    passwordField.dispatchEvent(new Event('change', { bubbles: true }));
   }
   
   if (usernameField) {
+    console.log('Filling username field:', usernameField);
     usernameField.value = credential.username;
     usernameField.dispatchEvent(new Event('input', { bubbles: true }));
+    usernameField.dispatchEvent(new Event('change', { bubbles: true }));
   }
   
-  // If there's a form, set up submission detection
-  if (form) {
-    // Tell the background script that we used a credential
-    chrome.runtime.sendMessage({
-      action: 'credentialUsed',
-      credentialId: credential.id
-    });
-  }
+  // Tell the background script that we used a credential
+  chrome.runtime.sendMessage({
+    action: 'credentialUsed',
+    credentialId: credential.id
+  });
 }
 
 // Fill a field with a generated password
@@ -258,6 +440,7 @@ function fillWithGeneratedPassword(password, field) {
   if (field) {
     field.value = password;
     field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.dispatchEvent(new Event('change', { bubbles: true }));
   }
 }
 
@@ -266,75 +449,50 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('Content script received message:', request.action);
   
   if (request.action === "getLoginForms") {
-    const forms = detectLoginForms();
-    sendResponse({ forms });
+    console.log('Getting login forms');
+    const forms = document.querySelectorAll('form');
+    const loginForms = [];
+    
+    forms.forEach((form, formIndex) => {
+      const passwordField = form.querySelector('input[type="password"]');
+      if (passwordField) {
+        const usernameField = findUsernameField(form, passwordField);
+        if (usernameField) {
+          loginForms.push({
+            formIndex,
+            usernameField: {
+              id: usernameField.id || '',
+              name: usernameField.name || '',
+              type: usernameField.type || ''
+            },
+            passwordField: {
+              id: passwordField.id || '',
+              name: passwordField.name || '',
+              type: 'password'
+            }
+          });
+        }
+      }
+    });
+    
+    sendResponse({ forms: loginForms });
   } 
   else if (request.action === "fillLoginForm") {
+    console.log('Filling login form with credential:', request.credential);
     fillLoginForm(request.credential);
     sendResponse({ success: true });
   }
   else if (request.action === "showCredentialSelector") {
+    console.log('Showing credential selector with', request.credentials.length, 'credentials');
     createCredentialSelector();
     populateCredentialSelector(request.credentials);
     sendResponse({ success: true });
   }
   else if (request.action === "fillWithGeneratedPassword") {
+    console.log('Filling with generated password');
     fillWithGeneratedPassword(request.password);
     sendResponse({ success: true });
   }
   
   return true; // Required for async response
 });
-
-// Set up form submission detection
-document.addEventListener('DOMContentLoaded', () => {
-  const forms = document.querySelectorAll('form');
-  forms.forEach(form => {
-    if (form.querySelector('input[type="password"]')) {
-      form.addEventListener('submit', function(e) {
-        // Find username and password fields
-        const passwordField = form.querySelector('input[type="password"]');
-        const usernameField = form.querySelector('input[type="text"], input[type="email"]');
-        
-        if (passwordField && usernameField && passwordField.value) {
-          // Send message to background script
-          chrome.runtime.sendMessage({
-            action: 'credentialSubmitted',
-            data: {
-              url: window.location.href,
-              domain: window.location.hostname,
-              username: usernameField.value,
-              password: passwordField.value,
-              title: document.title || window.location.hostname
-            }
-          });
-        }
-      });
-    }
-  });
-});
-
-// Add CSS for the badge
-const style = document.createElement('style');
-style.textContent = `
-  .keyvault-badge {
-    position: absolute;
-    right: 10px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 20px;
-    height: 20px;
-    border-radius: 50%;
-    background-color: #6e59a5;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    z-index: 9999;
-    transition: background-color 0.2s;
-  }
-  .keyvault-badge:hover {
-    background-color: #8b5cf6;
-  }
-`;
-document.head.appendChild(style);

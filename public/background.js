@@ -1,9 +1,11 @@
 
 // Background script for Key Vault Guardian Angel extension
+console.log("Key Vault Guardian Angel background script loaded");
 
-// Initialize data storage
+// Initialize data storage and context menus
 chrome.runtime.onInstalled.addListener(() => {
   console.log("Key Vault Guardian Angel installed!");
+  
   // Create initial vault structure
   chrome.storage.local.get('vault', (result) => {
     if (!result.vault) {
@@ -19,7 +21,8 @@ chrome.runtime.onInstalled.addListener(() => {
               includeUppercase: true,
               includeLowercase: true,
               includeNumbers: true,
-              includeSymbols: true
+              includeSymbols: true,
+              excludeSimilarCharacters: false
             }
           },
           locked: true,
@@ -41,7 +44,7 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId === "generatePassword") {
     // Generate a password and insert it into the field
-    const password = generateRandomPassword();
+    const password = generateStrongPassword();
     chrome.tabs.sendMessage(tab.id, {
       action: "fillWithGeneratedPassword",
       password: password
@@ -49,122 +52,62 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   }
 });
 
-// Generate a random password (simplified version)
-function generateRandomPassword() {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()";
-  let password = "";
-  for (let i = 0; i < 16; i++) {
-    password += chars.charAt(Math.floor(Math.random() * chars.length));
+// Generate a strong password using crypto API
+function generateStrongPassword() {
+  // Default settings
+  const length = 16;
+  const includeUppercase = true;
+  const includeLowercase = true;
+  const includeNumbers = true;
+  const includeSymbols = true;
+  
+  let chars = '';
+  
+  const UPPERCASE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const LOWERCASE_CHARS = 'abcdefghijklmnopqrstuvwxyz';
+  const NUMBER_CHARS = '0123456789';
+  const SYMBOL_CHARS = '!@#$%^&*()_+~`|}{[]:;?><,./-=';
+  
+  if (includeUppercase) chars += UPPERCASE_CHARS;
+  if (includeLowercase) chars += LOWERCASE_CHARS;
+  if (includeNumbers) chars += NUMBER_CHARS;
+  if (includeSymbols) chars += SYMBOL_CHARS;
+  
+  let password = '';
+  const array = new Uint8Array(length);
+  crypto.getRandomValues(array);
+  
+  for (let i = 0; i < length; i++) {
+    password += chars.charAt(array[i] % chars.length);
   }
+  
   return password;
 }
 
-// Listen for tab changes to check for login forms
+// Listen for tab navigation to check for login forms
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && tab.url && !tab.url.startsWith('chrome://')) {
+    // Execute a content script to check for login forms
     chrome.scripting.executeScript({
       target: { tabId },
-      function: checkForLoginForms
-    });
+      function: () => {
+        // The actual code runs in content.js which is already injected
+        chrome.runtime.sendMessage({ action: "checkForLoginForms", url: window.location.hostname });
+      }
+    }).catch(err => console.error('Error executing script:', err));
   }
 });
-
-// Function to check if the current page has login forms
-function checkForLoginForms() {
-  // Look for password fields on the page
-  const passwordFields = document.querySelectorAll('input[type="password"]');
-  
-  // If we found at least one password field, notify the extension
-  if (passwordFields.length > 0) {
-    const url = new URL(window.location.href);
-    chrome.runtime.sendMessage({ 
-      action: "loginFormDetected", 
-      url: url.hostname,
-      formCount: passwordFields.length
-    });
-    
-    // Add a small badge to the password fields
-    passwordFields.forEach(field => {
-      // Create the badge element
-      const badge = document.createElement('div');
-      badge.className = 'keyvault-badge';
-      badge.style.position = 'absolute';
-      badge.style.right = '10px';
-      badge.style.top = '50%';
-      badge.style.transform = 'translateY(-50%)';
-      badge.style.zIndex = '9999';
-      badge.style.cursor = 'pointer';
-      badge.style.width = '20px';
-      badge.style.height = '20px';
-      badge.style.borderRadius = '50%';
-      badge.style.backgroundColor = '#6e59a5';
-      badge.style.display = 'flex';
-      badge.style.alignItems = 'center';
-      badge.style.justifyContent = 'center';
-      badge.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M19 11H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2z"></path><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>';
-      
-      // Position the badge properly
-      const fieldRect = field.getBoundingClientRect();
-      const fieldStyle = window.getComputedStyle(field);
-      field.style.paddingRight = '30px';
-      
-      // Set up container for positioning
-      const container = document.createElement('div');
-      container.style.position = 'relative';
-      
-      // Insert the badge
-      field.parentNode.insertBefore(container, field);
-      container.appendChild(field);
-      container.appendChild(badge);
-      
-      // Add click handler to the badge
-      badge.addEventListener('click', function() {
-        chrome.runtime.sendMessage({ 
-          action: "autofillRequested", 
-          url: window.location.hostname 
-        });
-      });
-    });
-  }
-}
-
-// Listen for form submissions to capture credentials
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'complete' && tab.url && !tab.url.startsWith('chrome://')) {
-    chrome.scripting.executeScript({
-      target: { tabId },
-      function: detectFormSubmissions
-    });
-  }
-});
-
-function detectFormSubmissions() {
-  document.querySelectorAll('form').forEach(form => {
-    const passwordField = form.querySelector('input[type="password"]');
-    if (passwordField) {
-      form.addEventListener('submit', function() {
-        const usernameField = form.querySelector('input[type="text"], input[type="email"]');
-        if (usernameField && passwordField.value) {
-          chrome.runtime.sendMessage({
-            action: "credentialSubmitted",
-            data: {
-              url: window.location.href,
-              domain: window.location.hostname,
-              username: usernameField.value,
-              password: passwordField.value,
-              title: document.title || window.location.hostname
-            }
-          });
-        }
-      });
-    }
-  });
-}
 
 // Listen for messages from popup or content scripts
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  console.log("Background received message:", request.action);
+  
   // Handle specific actions
-  if (request.action === "getMatchingCredentials") {
+  if (request.action === "checkForLoginForms") {
+    // This just notifies the background script that we should look for forms on this page
+    // No direct action needed here as content script will handle UI interaction
+  }
+  else if (request.action === "getMatchingCredentials") {
     getMatchingCredentials(request.domain, sendResponse);
     return true; // Keep the message channel open for async response
   }
@@ -174,6 +117,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   else if (request.action === "credentialSubmitted") {
     saveDetectedCredential(request.data);
+    return true;
+  }
+  else if (request.action === "credentialUsed") {
+    updateCredentialLastUsed(request.credentialId);
     return true;
   }
 });
@@ -200,6 +147,27 @@ function getMatchingCredentials(domain, sendResponse) {
     });
     
     sendResponse({ credentials: matchingCredentials, locked: false });
+  });
+}
+
+// Update the last used timestamp for a credential
+function updateCredentialLastUsed(credentialId) {
+  chrome.storage.local.get('vault', ({ vault }) => {
+    if (!vault || vault.locked) return;
+    
+    const updatedCredentials = vault.credentials.map(cred => {
+      if (cred.id === credentialId) {
+        return { ...cred, lastUsed: new Date().toISOString() };
+      }
+      return cred;
+    });
+    
+    chrome.storage.local.set({
+      vault: {
+        ...vault,
+        credentials: updatedCredentials
+      }
+    });
   });
 }
 
@@ -244,21 +212,6 @@ function handleAutofill(url, tabId) {
           credentials: matchingCredentials
         });
       }
-      
-      // Update last used timestamp
-      const updatedCredentials = vault.credentials.map(cred => {
-        if (matchingCredentials.find(mc => mc.id === cred.id)) {
-          return { ...cred, lastUsed: new Date() };
-        }
-        return cred;
-      });
-      
-      chrome.storage.local.set({
-        vault: {
-          ...vault,
-          credentials: updatedCredentials
-        }
-      });
     } else {
       // No credentials found
       chrome.notifications.create({
@@ -341,7 +294,7 @@ chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) =
         }
       });
       
-      const now = new Date();
+      const now = new Date().toISOString();
       
       // Update existing credential
       if (existingCredIndex >= 0) {
